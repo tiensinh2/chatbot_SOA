@@ -1,0 +1,161 @@
+﻿{
+    "name":  "chatbot-project",
+    "type":  "folder",
+    "children":  [
+                     {
+                         "name":  "database",
+                         "type":  "folder",
+                         "children":  [
+                                          {
+                                              "name":  "__pycache__",
+                                              "type":  "folder",
+                                              "children":  [
+                                                               {
+                                                                   "name":  "models.cpython-313.pyc",
+                                                                   "type":  "file"
+                                                               },
+                                                               {
+                                                                   "name":  "mongo_handler.cpython-313.pyc",
+                                                                   "type":  "file"
+                                                               },
+                                                               {
+                                                                   "name":  "__init__.cpython-313.pyc",
+                                                                   "type":  "file"
+                                                               }
+                                                           ]
+                                          },
+                                          {
+                                              "name":  "models.py",
+                                              "type":  "file"
+                                          },
+                                          {
+                                              "name":  "mongo_handler.py",
+                                              "type":  "file"
+                                          },
+                                          {
+                                              "name":  "setup.py",
+                                              "type":  "file"
+                                          },
+                                          {
+                                              "name":  "__init__.py",
+                                              "type":  "file"
+                                          }
+                                      ]
+                     },
+                     {
+                         "name":  "prompts",
+                         "type":  "folder",
+                         "children":  [
+                                          {
+                                              "name":  "system_prompts.py",
+                                              "type":  "file"
+                                          }
+                                      ]
+                     },
+                     {
+                         "name":  "services",
+                         "type":  "folder",
+                         "children":  [
+                                          {
+                                              "name":  "__pycache__",
+                                              "type":  "folder",
+                                              "children":  [
+                                                               {
+                                                                   "name":  "groq_service.cpython-313.pyc",
+                                                                   "type":  "file"
+                                                               },
+                                                               {
+                                                                   "name":  "__init__.cpython-313.pyc",
+                                                                   "type":  "file"
+                                                               }
+                                                           ]
+                                          },
+                                          {
+                                              "name":  "groq_service.py",
+                                              "type":  "file"
+                                          },
+                                          {
+                                              "name":  "__init__.py",
+                                              "type":  "file"
+                                          }
+                                      ]
+                     },
+                     {
+                         "name":  "utils",
+                         "type":  "folder",
+                         "children":  [
+                                          {
+                                              "name":  "helpers.py",
+                                              "type":  "file"
+                                          },
+                                          {
+                                              "name":  "__init__.py",
+                                              "type":  "file"
+                                          }
+                                      ]
+                     },
+                     {
+                         "name":  "venv",
+                         "type":  "folder",
+                         "children":  [
+                                          {
+                                              "name":  "Include",
+                                              "type":  "folder",
+                                              "children":  [
+
+                                                           ]
+                                          },
+                                          {
+                                              "name":  ".gitignore",
+                                              "type":  "file"
+                                          },
+                                          {
+                                              "name":  "pyvenv.cfg",
+                                              "type":  "file"
+                                          }
+                                      ]
+                     },
+                     {
+                         "name":  "__pycache__",
+                         "type":  "folder",
+                         "children":  [
+                                          {
+                                              "name":  "config.cpython-313.pyc",
+                                              "type":  "file"
+                                          }
+                                      ]
+                     },
+                     {
+                         "name":  ".env",
+                         "type":  "file"
+                     },
+                     {
+                         "name":  ".gitignore",
+                         "type":  "file"
+                     },
+                     {
+                         "name":  "api_server.py",
+                         "type":  "file"
+                     },
+                     {
+                         "name":  "chatbot.log",
+                         "type":  "file"
+                     },
+                     {
+                         "name":  "config.py",
+                         "type":  "file"
+                     },
+                     {
+                         "name":  "main.py",
+                         "type":  "file"
+                     },
+                     {
+                         "name":  "requirements.txt",
+                         "type":  "file"
+                     },
+                     {
+                         "name":  "setup_test.py",
+                         "type":  "file"
+                     }
+                 ]
+}
