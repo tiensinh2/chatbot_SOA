@@ -8,6 +8,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import logging
 from datetime import datetime
+import os
 
 from config import config
 from database.mongo_handler import MongoDBHandler
@@ -35,7 +36,7 @@ def init_services():
     except Exception as e:
         logger.error(f"❌ Lỗi khởi tạo services: {e}")
         raise
-
+init_services()
 # Route chính
 @app.route('/')
 def home():
@@ -323,7 +324,8 @@ if __name__ == '__main__':
         print("   4. Thêm body JSON: {\"user_id\": \"test\", \"message\": \"Tôi muốn mua điện thoại\"}")
         
         # Chạy server
-        app.run(host='0.0.0.0', port=5000, debug=True)
+        port = int(os.environ.get("PORT", 5000))
+        app.run(host="0.0.0.0", port=port, debug=False)
         
     except Exception as e:
         print(f"❌ Không thể khởi động server: {e}")
