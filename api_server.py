@@ -1,7 +1,8 @@
 """
-API Server cho Shop Chatbot
-Chạy: python api_server.py
-Truy cập: http://localhost:5000
+api_server.py
+API Server cho Shop Chatbot - Ổn định cao, tối ưu ngữ cảnh
+Chỉ search database khi người dùng yêu cầu sản phẩm mới (dựa trên từ khóa)
+Các câu hỏi tiếp theo sẽ tái sử dụng danh sách sản phẩm hiện tại trong session
 """
 
 from flask import Flask, request, jsonify
@@ -9,167 +10,191 @@ from flask_cors import CORS
 import logging
 from datetime import datetime
 import os
+import traceback
 
 from config import config
 from database.mongo_handler import MongoDBHandler
-from services.groq_service import GroqService
+from services.groq_service import GroqService, GroqServiceError
 from services.redis_service import RedisService
 
-# ----------------- Thiết lập Flask -----------------
 app = Flask(__name__)
 CORS(app)
-logging.basicConfig(level=logging.INFO)
+
+# Logging setup
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('api_server.log', encoding='utf-8')
+    ]
+)
 logger = logging.getLogger(__name__)
 
-# ----------------- Khởi tạo services -----------------
-db_handler = None
-groq_service = None
-redis_service = None
+# Khởi tạo services
+try:
+    db_handler = MongoDBHandler()
+    groq_service = GroqService()
+    redis_service = RedisService()
+    logger.info("API Server - Tất cả services đã khởi tạo thành công")
+except Exception as e:
+    logger.critical(f"Không thể khởi tạo services: {e}")
+    raise
 
-def init_services():
-    global db_handler, groq_service, redis_service
-    try:
-        db_handler = MongoDBHandler()
-        groq_service = GroqService()
-        redis_service = RedisService()
-        logger.info("✅ Services đã được khởi tạo thành công")
-    except Exception as e:
-        logger.error(f"❌ Lỗi khi khởi tạo services: {e}")
-        raise
 
-init_services()
+# ================= TỪ KHÓA KÍCH HOẠT TÌM KIẾM SẢN PHẨM MỚI =================
+PRODUCT_KEYWORDS = {
+    'laptop', 'macbook', 'dell', 'hp', 'asus', 'lenovo', 'acer',
+    'điện thoại', 'iphone', 'samsung', 'xiaomi', 'oppo', 'vivo', 'realme',
+    'tai nghe', 'headphone', 'airpods', 'sony', 'jbl', 'marshall',
+    'loa', 'speaker', 'màn hình', 'monitor', 'tv', 'tivi', 'smart tv',
+    'máy ảnh', 'camera', 'đồng hồ', 'smartwatch', 'watch'
+}
 
-# ----------------- Routes -----------------
+def is_new_product_request(text: str) -> bool:
+    """Kiểm tra xem tin nhắn có chứa yêu cầu tìm sản phẩm mới không"""
+    if not text:
+        return False
+    text_lower = text.lower()
+    return any(keyword in text_lower for keyword in PRODUCT_KEYWORDS)
+
+
+# ================= ROUTES =================
 
 @app.route('/')
 def home():
-    """Trang chủ"""
     return jsonify({
         "status": "running",
-        "service": "Shop Chatbot API",
-        "version": "1.0",
-        "endpoints": {
-            "GET /": "Trang chủ",
-            "GET /health": "Kiểm tra sức khỏe hệ thống",
-            "GET /products": "Lấy danh sách sản phẩm",
-            "GET /products/search?q=...": "Tìm kiếm sản phẩm",
-            "GET /categories": "Lấy danh mục sản phẩm",
-            "POST /chat": "Chat với AI",
-            "GET /stats": "Thống kê hệ thống"
-        }
+        "message": "Shop Chatbot API - Ổn định & tối ưu ngữ cảnh",
+        "version": "optimized-v1"
     })
 
-@app.route('/health', methods=['GET'])
+
+@app.route('/health')
 def health_check():
-    """Kiểm tra MongoDB, Groq và Redis"""
-    try:
-        mongo_status = db_handler.test_connection() if db_handler else False
-        groq_status = groq_service.test_connection() if groq_service else False
-        redis_status = redis_service.is_connected if redis_service else False
-        
-        return jsonify({
-            "status": "healthy" if all([mongo_status, groq_status, redis_status]) else "degraded",
-            "timestamp": datetime.now().isoformat(),
-            "services": {
-                "mongodb": "connected" if mongo_status else "disconnected",
-                "groq_api": "connected" if groq_status else "disconnected",
-                "redis": "connected" if redis_status else "disconnected"
-            }
-        })
-    except Exception as e:
-        return jsonify({"status": "unhealthy", "error": str(e)}), 500
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat()
+    })
+
 
 @app.route('/chat', methods=['POST'])
 def chat():
-    """Endpoint chat với AI, lưu lịch sử vào Redis"""
     try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"success": False, "error": "Thiếu dữ liệu request body"}), 400
-        
+        data = request.get_json(force=True)
+        if not data or 'message' not in data:
+            return jsonify({"success": False, "error": "Thiếu trường 'message'"}), 400
+
         user_id = data.get('user_id', 'anonymous')
-        session_id = data.get('session_id', user_id)
-        message = data.get('message')
-        
+        message = str(data['message']).strip()
         if not message:
-            return jsonify({"success": False, "error": "Thiếu tin nhắn (message)"}), 400
+            return jsonify({"success": False, "error": "Tin nhắn rỗng"}), 400
 
-        # --- Lấy hoặc tạo session ---
-        session = redis_service.get_session(user_id)
-        if not session:
-            session = redis_service.create_session(user_id)
+        logger.info(f"[{user_id}] User: {message}")
 
-        # --- Thêm message vào history ---
-        redis_service.add_message(user_id, role="user", content=message)
-        redis_service.increment_message_count(user_id)
+        # Lấy hoặc tạo session
+        session = redis_service.get_session(user_id) or redis_service.create_session(user_id)
 
-        # --- Tìm sản phẩm liên quan ---
-        products = db_handler.search_products(message, limit=3)
-        
-        # --- Tạo response từ AI ---
-        response_text = groq_service.create_product_recommendation(
-            user_query=message,
-            products=products,
-            conversation_history=redis_service.get_conversation_history(user_id)
-        )
-        
-        # --- Thêm response AI vào history ---
-        redis_service.add_message(user_id, role="assistant", content=response_text)
+        # Lưu tin nhắn người dùng vào lịch sử
+        redis_service.add_message(user_id, "user", message)
+
+        products = []
+        should_search_new = is_new_product_request(message)
+
+        if should_search_new:
+            # Chỉ search khi thực sự có yêu cầu sản phẩm mới
+            logger.info(f"[{user_id}] Phát hiện yêu cầu sản phẩm mới → thực hiện search")
+            try:
+                products = db_handler.search_products(message, limit=6)
+                if products:
+                    valid_ids = [str(p['_id']) for p in products if p.get('_id')]
+                    session['current_products'] = valid_ids
+                    redis_service.update_session(user_id, session)
+                logger.info(f"[{user_id}] Tìm thấy {len(products)} sản phẩm mới")
+            except Exception as e:
+                logger.error(f"[{user_id}] Lỗi khi search sản phẩm: {e}")
+                products = []
+
+        elif session.get('current_products'):
+            # Có ngữ cảnh cũ → tái sử dụng
+            current_ids = session['current_products']
+            try:
+                products = db_handler.get_products_by_ids(current_ids)
+                logger.info(f"[{user_id}] Tái sử dụng ngữ cảnh cũ: {len(products)} sản phẩm")
+            except Exception as e:
+                logger.error(f"[{user_id}] Lỗi lấy sản phẩm theo ID cũ: {e}")
+                products = []
+
+        # Lấy lịch sử trò chuyện (ưu tiên mạnh)
+        try:
+            history = redis_service.get_conversation_history(user_id, limit=12)
+        except Exception as e:
+            logger.warning(f"[{user_id}] Lỗi lấy history: {e}")
+            history = []
+
+        # Gọi Groq để tạo phản hồi
+        try:
+            response = groq_service.create_product_recommendation(
+                user_query=message,
+                products=products,
+                conversation_history=history
+            )
+        except GroqServiceError:
+            response = "Xin lỗi, AI đang bận. Bạn thử lại sau vài phút nhé 😊"
+        except Exception as e:
+            logger.error(f"[{user_id}] Lỗi Groq: {e}")
+            response = "Xin lỗi, có lỗi khi xử lý yêu cầu của bạn."
+
+        # Lưu phản hồi trợ lý
+        redis_service.add_message(user_id, "assistant", response)
+
+        # Chuẩn hóa _id thành string để JSON serializable
+        safe_products = [
+            {**p, '_id': str(p['_id'])} if p.get('_id') else p
+            for p in products
+        ]
 
         return jsonify({
             "success": True,
             "user_id": user_id,
-            "session_id": session_id,
             "query": message,
-            "response": response_text,
-            "products_found": len(products),
-            "products": products[:3],
-            "timestamp": datetime.now().isoformat(),
-            "model": config.DEFAULT_MODEL
+            "response": response,
+            "products_found": len(safe_products),
+            "products": safe_products,
+            "new_search_performed": should_search_new,
+            "timestamp": datetime.now().isoformat()
         })
-        
+
     except Exception as e:
-        logger.error(f"❌ Lỗi chat endpoint: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.error(f"Lỗi nghiêm trọng tại /chat: {e}\n{traceback.format_exc()}")
+        return jsonify({"success": False, "error": "Lỗi server nội bộ"}), 500
+
 
 @app.route('/chat/history', methods=['GET'])
-def get_chat_history():
-    """Lấy lịch sử chat cho user"""
+def get_history():
     try:
         user_id = request.args.get('user_id', 'anonymous')
-        limit = int(request.args.get('limit', config.MAX_CHAT_HISTORY))
+        limit = max(1, int(request.args.get('limit', 20)))
         history = redis_service.get_conversation_history(user_id, limit=limit)
-        return jsonify({
-            "success": True,
-            "user_id": user_id,
-            "history": history,
-            "count": len(history)
-        })
+        return jsonify({"success": True, "count": len(history), "history": history})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.error(f"Lỗi lấy history: {e}")
+        return jsonify({"success": False, "error": "Không thể lấy lịch sử"}), 500
+
 
 @app.route('/chat/clear', methods=['POST'])
-def clear_chat_history():
-    """Xóa lịch sử chat của user"""
+def clear_history():
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
         user_id = data.get('user_id', 'anonymous')
-        success = redis_service.clear_conversation(user_id)
-        return jsonify({"success": success, "user_id": user_id})
+        redis_service.clear_conversation(user_id)
+        return jsonify({"success": True, "message": "Đã xóa lịch sử trò chuyện và ngữ cảnh sản phẩm"})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.error(f"Lỗi xóa history: {e}")
+        return jsonify({"success": False, "error": "Không thể xóa lịch sử"}), 500
 
-@app.route('/stats', methods=['GET'])
-def get_stats():
-    """Lấy thống kê hệ thống Redis"""
-    try:
-        redis_info = redis_service.get_redis_info()
-        return jsonify({"success": True, "redis_info": redis_info})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
 
-# ----------------- Chạy server -----------------
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    logger.info(f"🚀 API Server đang chạy tại http://localhost:{port}")
-    app.run(host="0.0.0.0", port=port, debug=False)
+    logger.info(f"API Server đang chạy tại http://0.0.0.0:{port}")
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)

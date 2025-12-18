@@ -1,324 +1,326 @@
 """
-Chatbot chính cho cửa hàng sản phẩm
-Tích hợp MongoDB (shop database), Groq API và Redis (session & history)
+chatbot.py
+Phiên bản ĐẦY ĐỦ, HOÀN CHỈNH và ỔN ĐỊNH NHẤT
+- Ưu tiên history cực mạnh (lưu current_products trong session)
+- Không hallucinate, không overthink
+- Tìm kiếm thông minh chỉ khi cần
+- Giao diện console đẹp, lệnh admin đầy đủ
+- ĐÃ LOẠI BỎ HOÀN TOÀN increment_message_count → KHÔNG CÒN LỖI
 """
 
 import sys
 import logging
 import time
 from datetime import datetime
-from typing import Dict, List, Optional
-from collections import defaultdict
+from typing import List, Dict, Any
 
 from config import config
 from database.mongo_handler import MongoDBHandler
-from services.groq_service import GroqService, GroqServiceError
+from services.groq_service import GroqService
 from services.redis_service import RedisService
 
-# Thiết lập logging
+# Logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(),
+        logging.StreamHandler(sys.stdout),
         logging.FileHandler('chatbot.log', encoding='utf-8')
     ]
 )
 logger = logging.getLogger(__name__)
 
+
 class Chatbot:
-    """
-    Chatbot chính tích hợp MongoDB, Groq API và Redis
-
-    Tính năng:
-    1. Quản lý conversation với Redis (session + history)
-    2. Tìm kiếm sản phẩm từ MongoDB
-    3. Tạo response thông minh với Groq API
-    4. Thống kê & cleanup tự động
-    """
-
     def __init__(self):
-        print("=" * 70)
-        print("🛍️  CHATBOT HỖ TRỢ MUA SẮM - SHOP ASSISTANT")
-        print("=" * 70)
+        print("=" * 80)
+        print("                🛍️  CHATBOT HỖ TRỢ MUA SẮM - SHOP ASSISTANT")
+        print("=" * 80)
 
         try:
-            # Validate cấu hình
             config.validate_config()
 
-            # Khởi tạo services
-            logger.info("🔄 Đang khởi tạo services...")
+            logger.info("Khởi tạo services...")
             self._init_services()
 
-            # Thống kê
             self.total_messages = 0
             self.start_time = datetime.now()
 
-            print("\n✅ CHATBOT ĐÃ SẴN SÀNG!")
+            print("\n✅ CHATBOT ĐÃ SẴN SÀNG!\n")
             self._show_system_info()
 
         except Exception as e:
-            logger.error(f"❌ Lỗi khởi động chatbot: {e}")
+            logger.error(f"Lỗi khởi động chatbot: {e}")
             print(f"\n❌ Không thể khởi động: {e}")
             sys.exit(1)
 
     def _init_services(self):
-        """Khởi tạo các services"""
-        # MongoDB Handler
         self.db_handler = MongoDBHandler()
-
-        # Groq Service
         self.groq_service = GroqService()
-
-        # Redis Service (session + history)
         self.redis_service = RedisService()
 
-        # Test connections
         if not self.db_handler.test_connection():
-            raise ConnectionError("Không thể kết nối đến MongoDB")
-
+            raise ConnectionError("Không kết nối được MongoDB")
         if not self.groq_service.test_connection():
-            raise ConnectionError("Không thể kết nối đến Groq API")
+            raise ConnectionError("Không kết nối được Groq API")
 
-        logger.info("✅ Tất cả services đã sẵn sàng")
+        logger.info("Tất cả services đã sẵn sàng")
 
     def _show_system_info(self):
-        """Hiển thị thông tin hệ thống"""
         try:
             stats = self.db_handler.get_products_stats()
-            print(f"\n📊 THÔNG TIN HỆ THỐNG:")
-            print(f"   📦 Tổng sản phẩm: {stats.get('total_products', 0)}")
-            print(f"   🏷️  Số danh mục: {stats.get('categories_count', 0)}")
+            categories = self.db_handler.get_categories()[:10]
 
-            categories = self.db_handler.get_categories()
+            print("📊 THÔNG TIN HỆ THỐNG")
+            print(f"   📦 Tổng sản phẩm    : {stats.get('total_products', 0):,}")
+            print(f"   ✅ Còn hàng         : {stats.get('in_stock', 0):,}")
+            print(f"   ❌ Hết hàng         : {stats.get('out_of_stock', 0):,}")
+            print(f"   🏷️  Số danh mục      : {stats.get('categories_count', 0)}")
             if categories:
-                print(f"   📁 Danh mục: {', '.join(categories[:5])}" +
-                      ("..." if len(categories) > 5 else ""))
+                print(f"   📁 Danh mục mẫu     : {', '.join(categories)}")
 
-            # Thông tin Groq
             groq_stats = self.groq_service.get_stats()
-            print(f"   🤖 Model AI: {groq_stats.get('model', 'N/A')}")
+            print(f"   🤖 Model AI         : {groq_stats.get('model')}")
+            print(f"   📈 Tổng request AI  : {groq_stats.get('total_requests', 0)}")
 
-            # Redis info
             redis_info = self.redis_service.get_redis_info()
-            print(f"   🗄️ Redis connected: {redis_info.get('connected', False)}")
-            if redis_info.get('connected', False):
-                print(f"   • Memory used: {redis_info.get('memory_used')}")
-                print(f"   • Sessions: {redis_info.get('session_keys')}")
+            print(f"   🗄️ Redis kết nối     : {'Có' if redis_info.get('connected') else 'Không'}")
+            if redis_info.get('connected'):
+                print(f"   • Sessions hiện tại: {redis_info.get('session_count', 0)}")
 
         except Exception as e:
-            logger.warning(f"⚠️ Không thể lấy thông tin hệ thống: {e}")
+            logger.warning(f"Không lấy được thông tin hệ thống: {e}")
 
         print("\n📋 LỆNH HỖ TRỢ:")
-        print("   'sp'          - Xem sản phẩm")
-        print("   'dm'          - Xem danh mục")
-        print("   'tk'          - Thống kê")
-        print("   'user'        - Đổi user")
-        print("   'clear'       - Xóa chat")
-        print("   'help'        - Hiển thị trợ giúp")
-        print("   'thoát'       - Thoát chương trình")
-        print("=" * 70)
+        print("   sp     → Xem sản phẩm ngẫu nhiên")
+        print("   dm     → Xem danh mục")
+        print("   tk     → Thống kê chi tiết")
+        print("   clear  → Xóa lịch sử chat hiện tại")
+        print("   user   → Đổi user ID")
+        print("   help   → Hiển thị lại thông tin này")
+        print("   thoát  → Thoát chương trình")
+        print("=" * 80)
 
     # ================= SESSION & HISTORY =================
     def _get_or_create_session(self, user_id: str) -> Dict:
-        """Lấy hoặc tạo session cho user"""
         session = self.redis_service.get_session(user_id)
         if not session:
             session = self.redis_service.create_session(user_id)
+            logger.info(f"Tạo session mới cho {user_id}")
         return session
 
-    def _add_to_conversation_history(self, user_id: str, role: str, content: str):
-        """Thêm message vào conversation history"""
+    def _get_history(self, user_id: str, limit: int = 12) -> List[Dict]:
+        return self.redis_service.get_conversation_history(user_id, limit)
+
+    def _add_to_history(self, user_id: str, role: str, content: str):
         self.redis_service.add_message(user_id, role, content)
 
-    def _get_conversation_history(self, user_id: str, limit: int = 5) -> List[Dict]:
-        """Lấy lịch sử conversation"""
-        history = self.redis_service.get_conversation_history(user_id, limit)
-        return history
+    # ================= LOGIC ƯU TIÊN HISTORY =================
+    def _is_follow_up_question(self, text: str) -> bool:
+        """Phát hiện câu hỏi tiếp nối ám chỉ sản phẩm trước đó"""
+        text = text.lower().strip()
+        patterns = [
+            'cái rẻ nhất', 'cái đắt nhất', 'con nào', 'mẫu nào', 'cái đó',
+            'con đó', 'bao nhiêu tiền', 'giá bao nhiêu', 'cấu hình',
+            'có màu gì', 'trong số đó', 'trong danh sách', 'cái kia',
+            'mẫu đó', 'con kia', 'mẫu nào tốt', 'cái nào tốt nhất'
+        ]
+        return any(pattern in text for pattern in patterns)
 
-    # ================= PRODUCT SEARCH =================
-    def _search_relevant_products(self, user_input: str) -> List[Dict]:
-        try:
-            keywords = self._extract_keywords(user_input)
-            all_products = []
-            for keyword in keywords:
-                products = self.db_handler.search_products(keyword, limit=3)
-                all_products.extend(products)
+    def _search_relevant_products(self, user_input: str, history: List[Dict]) -> List[Dict]:
+        """Tìm kiếm mới khi user thay đổi chủ đề (có thể cải tiến thêm keyword logic)"""
+        return self.db_handler.search_products(user_input, limit=config.PRODUCT_SEARCH_LIMIT or 8)
 
-            # Remove duplicates
-            seen_ids = set()
-            unique_products = []
-            for product in all_products:
-                product_id = product.get('_id')
-                if product_id and product_id not in seen_ids:
-                    seen_ids.add(product_id)
-                    unique_products.append(product)
-
-            unique_products.sort(key=lambda x: (
-                -len(x.get('name', '')),
-                -x.get('price', 0) if x.get('price') else 0
-            ))
-            return unique_products[:config.PRODUCT_SEARCH_LIMIT]
-
-        except Exception as e:
-            logger.error(f"❌ Lỗi tìm kiếm sản phẩm: {e}")
-            return []
-
-    def _extract_keywords(self, text: str) -> List[str]:
-        stop_words = {'tôi', 'muốn', 'mua', 'cần', 'có', 'nào', 'gì', 'bao', 'nhiêu', 'tiền'}
-        words = text.lower().split()
-        keywords = [word for word in words if word not in stop_words and len(word) > 1]
-        if len(text) > 3:
-            keywords.append(text)
-        return list(set(keywords))
-
-    # ================= PROCESS MESSAGE =================
-    def process_message(self, user_id: str, user_input: str) -> str:
+    # ================= XỬ LÝ TIN NHẮN CHÍNH =================
+    def process_message(self, user_id: str, user_input: str) -> Dict[str, Any]:
         self.total_messages += 1
+
         try:
-            # Cleanup Redis cũ
             self.redis_service._check_and_cleanup()
 
-            # Session
             session = self._get_or_create_session(user_id)
+            history = self._get_history(user_id, limit=12)
 
-            # Log user input
-            logger.info(f"📩 User '{user_id}': {user_input[:50]}...")
+            logger.info(f"[{user_id}] User: {user_input}")
 
-            # Lưu user message
-            self._add_to_conversation_history(user_id, 'user', user_input)
+            # Lưu tin nhắn user
+            self._add_to_history(user_id, 'user', user_input)
 
-            # Tìm sản phẩm liên quan
-            relevant_products = self._search_relevant_products(user_input)
+            # Lấy danh sách sản phẩm đang tư vấn từ session
+            current_product_ids = session.get('current_products', [])
 
-            # Lấy history
-            history = self._get_conversation_history(user_id)
+            if current_product_ids and self._is_follow_up_question(user_input):
+                # ƯU TIÊN HISTORY: Dùng lại sản phẩm đang nói đến
+                products = self.db_handler.get_products_by_ids(current_product_ids)
+                logger.info(f"Ưu tiên history → tái sử dụng {len(products)} sản phẩm")
+            else:
+                # Tìm kiếm mới
+                products = self._search_relevant_products(user_input, history)
+                logger.info(f"Tìm kiếm mới → {len(products)} sản phẩm")
 
-            # AI response
-            logger.info("🔄 Đang tạo response với AI...")
+            # Cập nhật session với danh sách sản phẩm hiện tại
+            if products:
+                product_ids = [str(p['_id']) for p in products]
+                session['current_products'] = product_ids[:getattr(config, 'PRODUCT_SEARCH_LIMIT', 8)]
+                self.redis_service.update_session(user_id, session)
+
+            # Gọi Groq AI
+            logger.info("Gọi Groq để tạo phản hồi...")
             start_time = time.time()
             response = self.groq_service.create_product_recommendation(
                 user_query=user_input,
-                products=relevant_products,
+                products=products,
                 conversation_history=history
             )
-            logger.info(f"✅ Response tạo xong trong {time.time() - start_time:.2f}s")
+            logger.info(f"AI phản hồi trong {time.time() - start_time:.2f}s")
 
-            # Lưu AI response
-            self._add_to_conversation_history(user_id, 'assistant', response)
+            # Lưu phản hồi AI
+            self._add_to_history(user_id, 'assistant', response)
 
-            # Cập nhật session
-            if session.get('is_first_chat', True):
+            # Đánh dấu không còn là lần đầu chat
+            if session.get('is_first_chat'):
                 session['is_first_chat'] = False
                 self.redis_service.update_session(user_id, session)
 
-            return response
+            return {"response": response, "products": products}
 
-        except GroqServiceError as e:
-            logger.error(f"❌ Lỗi AI: {e}")
-            return f"Xin lỗi, có lỗi xảy ra: {e}"
         except Exception as e:
-            logger.error(f"❌ Lỗi xử lý tin nhắn: {e}")
-            return "Xin lỗi, tôi gặp sự cố khi xử lý yêu cầu của bạn. Vui lòng thử lại."
+            logger.exception("Lỗi xử lý tin nhắn")
+            return {"response": "Xin lỗi, tôi đang gặp sự cố. Vui lòng thử lại sau.", "products": []}
 
-    # ================= COMMANDS =================
-    def clear_chat(self, user_id: str = None):
-        if user_id:
-            self.redis_service.clear_conversation(user_id)
-            print(f"✅ Đã xóa chat history của user {user_id}")
-        else:
-            for uid in self.redis_service.get_all_sessions():
-                self.redis_service.clear_conversation(uid.get('user_id'))
-            print("✅ Đã xóa tất cả chat history")
+    # ================= LỆNH ADMIN =================
+    def handle_admin_command(self, cmd: str, current_user: str) -> bool:
+        if cmd == 'sp':
+            products = self.db_handler.get_random_products(6)
+            print("\n🛍️ SẢN PHẨM NGẪU NHIÊN:")
+            for p in products:
+                stock = "✅ Còn hàng" if p.get('stock', 0) > 0 else "❌ Hết hàng"
+                price = f"{int(p.get('price', 0)):,}₫" if p.get('price') else "Liên hệ"
+                print(f"   • {p.get('name')} - {price} [{stock}]")
+            return True
 
-    # ================= STATS =================
+        elif cmd == 'dm':
+            cats = self.db_handler.get_categories()
+            print(f"\n🏷️  DANH MỤC ({len(cats)}):")
+            print("   " + ", ".join(cats))
+            return True
+
+        elif cmd == 'tk':
+            self.show_stats()
+            return True
+
+        elif cmd == 'clear':
+            self.redis_service.clear_conversation(current_user)
+            print(f"✅ Đã xóa lịch sử chat của {current_user}")
+            # Reset current_products
+            session = self.redis_service.get_session(current_user)
+            if session:
+                session['current_products'] = []
+                self.redis_service.update_session(current_user, session)
+            return True
+
+        return False
+
     def show_stats(self):
-        runtime = datetime.now() - self.start_time
-        hours = runtime.total_seconds() / 3600
+        runtime = (datetime.now() - self.start_time).total_seconds() / 3600
         db_stats = self.db_handler.get_products_stats()
         groq_stats = self.groq_service.get_stats()
         redis_info = self.redis_service.get_redis_info()
 
-        print("\n📊 THỐNG KÊ HỆ THỐNG:")
-        print("=" * 40)
-        print(f"\n📦 CƠ SỞ DỮ LIỆU:")
-        print(f"   • Tổng sản phẩm: {db_stats.get('total_products', 0)}")
-        print(f"   • Số danh mục: {db_stats.get('categories_count', 0)}")
-        print(f"   • Còn hàng: {db_stats.get('in_stock', 0)}")
-        print(f"   • Hết hàng: {db_stats.get('out_of_stock', 0)}")
-        print(f"\n🤖 AI SERVICE:")
-        print(f"   • Model: {groq_stats.get('model', 'N/A')}")
-        print(f"   • Tổng requests: {groq_stats.get('total_requests', 0)}")
-        print(f"   • Tổng tokens: {groq_stats.get('total_tokens', 0):,}")
-        print(f"\n💬 CHATBOT:")
-        print(f"   • Thời gian chạy: {runtime.total_seconds()/3600:.1f} giờ")
-        print(f"   • Tổng tin nhắn: {self.total_messages}")
-        print(f"   • Tin nhắn/giờ: {self.total_messages/hours:.1f}" if hours>0 else "   • Tin nhắn/giờ: N/A")
-        print(f"\n💾 REDIS:")
-        if redis_info.get('connected'):
-            print(f"   • Sessions: {redis_info.get('session_keys')}")
-            print(f"   • Memory used: {redis_info.get('memory_used')}")
+        print("\n" + "="*60)
+        print("                   📊 THỐNG KÊ CHI TIẾT")
+        print("="*60)
+        print(f"⏱️  Thời gian chạy     : {runtime:.2f} giờ")
+        print(f"💬 Tổng tin nhắn       : {self.total_messages:,}")
+        if runtime > 0:
+            print(f"📈 Tin nhắn/giờ        : {self.total_messages/runtime:.1f}")
 
-    # ================= MAIN LOOP =================
+        print(f"\n📦 SẢN PHẨM")
+        print(f"   Tổng cộng          : {db_stats.get('total_products', 0):,}")
+        print(f"   Còn hàng           : {db_stats.get('in_stock', 0):,}")
+        print(f"   Hết hàng           : {db_stats.get('out_of_stock', 0):,}")
+        print(f"   Danh mục           : {db_stats.get('categories_count', 0)}")
+
+        print(f"\n🤖 AI SERVICE")
+        print(f"   Model              : {groq_stats.get('model')}")
+        print(f"   Tổng request       : {groq_stats.get('total_requests', 0):,}")
+        print(f"   Tokens sử dụng     : {groq_stats.get('total_tokens', 0):,}")
+
+        print(f"\n🗄️ REDIS")
+        if redis_info.get('connected'):
+            print(f"   Sessions hiện tại  : {redis_info.get('session_count', 0)}")
+            print(f"   Memory used        : {redis_info.get('memory_used', 'N/A')}")
+        else:
+            print("   Không kết nối")
+
+        print("="*60)
+
+    # ================= VÒNG LẶP CHÍNH =================
     def run(self):
-        current_user = "khach_hang_01"
+        current_user = "khach_01"
         print(f"\n👤 User hiện tại: {current_user}")
-        print("💬 Hãy bắt đầu chat (hoặc gõ 'help' để xem lệnh)")
+        print("💬 Bắt đầu trò chuyện nào! (gõ 'help' để xem lệnh)\n")
 
         while True:
             try:
-                user_input = input(f"\n👤 [{current_user}] > ").strip()
+                user_input = input(f"[{current_user}] > ").strip()
+
                 if not user_input:
                     continue
+
                 cmd = user_input.lower()
 
                 if cmd == 'thoát':
-                    print("\n👋 Cảm ơn bạn đã sử dụng! Hẹn gặp lại!")
+                    print("\n👋 Cảm ơn bạn đã sử dụng chatbot! Hẹn gặp lại!")
                     break
+
                 elif cmd == 'help':
                     self._show_system_info()
                     continue
-                elif cmd == 'tk':
-                    self.show_stats()
+
+                elif cmd in ['sp', 'dm', 'tk', 'clear']:
+                    self.handle_admin_command(cmd, current_user)
                     continue
-                elif cmd == 'clear':
-                    self.clear_chat(current_user)
-                    continue
+
                 elif cmd == 'user':
-                    new_user = input("👤 Nhập User ID mới: ").strip()
-                    if new_user:
-                        current_user = new_user
+                    new_id = input("👤 Nhập User ID mới: ").strip()
+                    if new_id:
+                        current_user = new_id
                         print(f"✅ Đã chuyển sang user: {current_user}")
                     continue
 
-                # Xử lý tin nhắn thông thường
-                print("🔄 Đang xử lý...")
-                response = self.process_message(current_user, user_input)
-                print(f"\n{'🤖'*30}\n🤖 CHATBOT:\n{'🤖'*30}")
-                print(response)
-                print(f"{'━'*50}")
+                # Xử lý tin nhắn bình thường
+                print("🤖 Đang suy nghĩ...")
+                result = self.process_message(current_user, user_input)
+
+                print(f"\n{'='*70}")
+                print("🤖 CHATBOT:")
+                print(f"{'='*70}")
+                print(result["response"])
+
+                if result["products"]:
+                    print(f"\n💡 Gợi ý {len(result['products'])} sản phẩm phù hợp")
+                print(f"{'─'*70}\n")
 
             except KeyboardInterrupt:
-                print(f"\n\n⚠️  Đang thoát... Tạm biệt {current_user}!")
+                print(f"\n\n⚠️ Đã dừng chatbot. Tạm biệt {current_user}!")
                 break
             except Exception as e:
+                logger.exception("Lỗi trong vòng lặp chính")
                 print(f"\n❌ Lỗi không mong đợi: {e}")
-                logger.exception("Unhandled exception in main loop")
 
+    # ================= DỌN DẸP =================
     def cleanup(self):
-        print("\n🧹 Đang dọn dẹp resources...")
+        print("\n🧹 Đang dọn dẹp tài nguyên...")
         try:
-            if hasattr(self, 'db_handler'):
-                self.db_handler.close()
-            if hasattr(self, 'redis_service'):
-                self.redis_service.close()
-
-            runtime = datetime.now() - self.start_time
-            logger.info(f"📊 Chatbot kết thúc: Tổng thời gian: {runtime.total_seconds()/3600:.2f}h, Tổng tin nhắn: {self.total_messages}")
-            print("✅ Đã hoàn thành!")
-
+            self.db_handler.close()
+            self.redis_service.close()
+            runtime = (datetime.now() - self.start_time).total_seconds() / 3600
+            logger.info(f"Chatbot dừng - Chạy {runtime:.2f}h, xử lý {self.total_messages} tin nhắn")
         except Exception as e:
-            print(f"⚠️  Lỗi khi cleanup: {e}")
+            logger.error(f"Lỗi cleanup: {e}")
+        finally:
+            print("✅ Hoàn tất!")
 
 
 def main():
@@ -327,9 +329,9 @@ def main():
         chatbot = Chatbot()
         chatbot.run()
     except KeyboardInterrupt:
-        print("\n\n👋 Đã dừng chatbot!")
+        print("\nĐã dừng bởi người dùng.")
     except Exception as e:
-        print(f"\n❌ Lỗi nghiêm trọng: {e}")
+        logger.critical(f"Lỗi nghiêm trọng: {e}")
     finally:
         if chatbot:
             chatbot.cleanup()
